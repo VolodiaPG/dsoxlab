@@ -76,6 +76,7 @@ STRINGS: dict[str, str] = {
     "start_context_already":
         "  already on « {section} », nothing to set",
     "start_deps_ok":       "  {count} required checks, all green",
+    "start_deps_ignored":  "  not needed by this lab, not checked: {components}",
     "start_deps_failing":  "  missing: {components}",
     "start_infra_already":
         "  already provisioned: the declared hosts have addresses, nothing to "

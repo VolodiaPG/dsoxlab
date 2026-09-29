@@ -47,7 +47,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Annotated
+from typing import TYPE_CHECKING, Annotated
 
 import typer
 
@@ -66,6 +66,9 @@ from ._commun import (
     _verrou,
 )
 from ._socle import app
+
+if TYPE_CHECKING:
+    from ..services.doctor import Check
 
 logger = logging.getLogger(__name__)
 
@@ -140,6 +143,34 @@ def _hote_repond(adresse: str, *, delai: float = 2.0) -> bool:
             return True
     except OSError:
         return False
+
+
+#: Les contrôles du doctor qui ne servent qu'à MONTER l'infrastructure : moteur
+#: de provisionnement, hyperviseur et ce qu'il exige de la machine hôte.
+_CONTROLES_DE_PROVISION = frozenset({
+    "provider", "kvm", "incus", "hw_virt", "cpu_arch", "resources",
+    "bridge_name", "libvirt_pool", "incus_pool", "iso_tool", "terraform",
+    "egress",
+})
+
+
+def _manquants_pour(lab: LabDefinition, manquants: list[Check], root: Path) -> list[Check]:
+    """Les prérequis en échec qui empêchent CE lab, et non le catalogue entier.
+
+    Le doctor juge le dépôt : un seul lab à conteneurs rend Docker requis, un
+    seul hôte déclaré rend l'hyperviseur requis. `start`, lui, ne lance qu'un
+    lab. Bloquer un lab `vm` sur Docker, ou un lab dont l'infrastructure répond
+    déjà sur un hyperviseur absent, arrêtait la séquence sur un composant dont
+    ce lab ne se sert pas — cas mesuré sur un poste macOS aux VMs montées hors
+    provision : `start` refusait ce que `run` jouait sans erreur.
+    """
+    if not lab.runtime.services:
+        manquants = [c for c in manquants if c.key != "docker"]
+    if any(c.key in _CONTROLES_DE_PROVISION for c in manquants) and (
+        lab.runtime.type is RuntimeType.SHELL or _infra_prete(root)
+    ):
+        manquants = [c for c in manquants if c.key not in _CONTROLES_DE_PROVISION]
+    return manquants
 
 
 def _infra_prete(root: Path) -> bool:
@@ -242,7 +273,8 @@ def start(
 
         elif etape.cle == "start_step_deps":
             rapport = collect_checks(root, _read_repo(root))
-            manquants = rapport.failing()
+            en_echec = rapport.failing()
+            manquants = _manquants_pour(lab, en_echec, root)
             if manquants:
                 console.print(_(
                     "start_deps_failing",
@@ -250,7 +282,14 @@ def start(
                 ))
                 _echec(numero, total, etape)
                 raise typer.Exit(2)
-            console.print(_("start_deps_ok", count=len(rapport.required)))
+            # Écartés sans être verts : les compter parmi « tous verts » mentirait.
+            ecartes = [c for c in en_echec if c not in manquants]
+            console.print(_("start_deps_ok", count=len(rapport.required) - len(ecartes)))
+            if ecartes:
+                console.print(_(
+                    "start_deps_ignored",
+                    components=", ".join(_(f"check_{c.key}") for c in ecartes),
+                ))
 
         elif etape.cle == "start_step_infra":
             if _infra_prete(root):

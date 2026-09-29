@@ -146,7 +146,7 @@ def test_un_echec_nomme_l_etape_et_sa_commande(
     monkeypatch.setattr(
         doctor, "collect_checks",
         lambda _root, _meta: doctor.DoctorReport(
-            required=[doctor._check("terraform", False, "introuvable")],
+            required=[doctor._check("pytest", False, "introuvable")],
         ),
     )
 
@@ -230,6 +230,85 @@ def test_une_infra_deja_montee_n_est_pas_remontee(
     assert etapes_simulees["provision"] == 0
     # La session s'ouvre quand même : c'est tout l'intérêt de l'idempotence.
     assert etapes_simulees["run"]
+
+
+# ── les prérequis sont ceux du lab, pas ceux du catalogue ───────────────────
+
+def _rapport_en_echec(monkeypatch: pytest.MonkeyPatch, *cles: str) -> None:
+    from dsoxlab.services import doctor
+
+    monkeypatch.setattr(
+        doctor, "collect_checks",
+        lambda _root, _meta: doctor.DoctorReport(
+            required=[doctor._check(c, False, "absent") for c in cles],
+        ),
+    )
+
+
+def test_docker_ne_bloque_pas_un_lab_sans_conteneur(
+    catalogue: Path, monkeypatch: pytest.MonkeyPatch,
+    etapes_simulees: dict[str, Any],
+) -> None:
+    """Docker est requis par le catalogue dès qu'UN lab déclare des services."""
+    _rapport_en_echec(monkeypatch, "docker")
+
+    resultat = runner.invoke(app, ["start", "lab-shell"])
+
+    assert resultat.exit_code == 0, resultat.output
+    assert etapes_simulees["run"]
+
+
+def test_l_hyperviseur_ne_bloque_pas_une_infra_qui_repond(
+    catalogue: Path, monkeypatch: pytest.MonkeyPatch,
+    etapes_simulees: dict[str, Any],
+) -> None:
+    """Hyperviseur et matériel ne servent qu'à monter : l'infra est déjà là."""
+    from dsoxlab.cli import demarrage
+
+    _rapport_en_echec(monkeypatch, "kvm", "hw_virt", "cpu_arch")
+    monkeypatch.setattr(demarrage, "_infra_prete", lambda _root: True)
+
+    resultat = runner.invoke(app, ["start", "lab-vm"])
+
+    assert resultat.exit_code == 0, resultat.output
+    # Écartés, pas déclarés verts.
+    assert "all green" in resultat.output and "0 required" in resultat.output
+    assert "not needed by this lab" in resultat.output
+    assert etapes_simulees["provision"] == 0
+    assert etapes_simulees["run"]
+
+
+def test_l_hyperviseur_bloque_quand_il_faut_monter(
+    catalogue: Path, monkeypatch: pytest.MonkeyPatch,
+    etapes_simulees: dict[str, Any],
+) -> None:
+    """Sans infrastructure, l'hyperviseur absent reste un arrêt nommé."""
+    from dsoxlab.cli import demarrage
+
+    _rapport_en_echec(monkeypatch, "kvm", "docker")
+    monkeypatch.setattr(demarrage, "_infra_prete", lambda _root: False)
+
+    resultat = runner.invoke(app, ["start", "lab-vm"])
+
+    assert resultat.exit_code == 2, resultat.output
+    assert "2/4" in resultat.output
+    assert etapes_simulees["provision"] == 0
+
+
+def test_un_prerequis_du_lab_le_bloque_toujours(
+    catalogue: Path, monkeypatch: pytest.MonkeyPatch,
+    etapes_simulees: dict[str, Any],
+) -> None:
+    """Le filtre ne retire que ce que le lab n'utilise pas : ansible reste dû."""
+    from dsoxlab.cli import demarrage
+
+    _rapport_en_echec(monkeypatch, "ansible")
+    monkeypatch.setattr(demarrage, "_infra_prete", lambda _root: True)
+
+    resultat = runner.invoke(app, ["start", "lab-vm"])
+
+    assert resultat.exit_code == 2, resultat.output
+    assert etapes_simulees["run"] == []
 
 
 # ── la séquence ne bouge pas d'une exécution à l'autre ───────────────────────

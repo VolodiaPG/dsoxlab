@@ -78,6 +78,7 @@ STRINGS: dict[str, str] = {
     "start_context_already":
         "  déjà sur « {section} », rien à poser",
     "start_deps_ok":       "  {count} contrôles requis, tous verts",
+    "start_deps_ignored":  "  inutiles à ce lab, non vérifiés : {components}",
     "start_deps_failing":  "  il manque : {components}",
     "start_infra_already":
         "  déjà provisionnée : les hôtes déclarés ont une adresse, rien à "
